@@ -1,0 +1,32 @@
+{
+	"manifest_version": 3,
+	"name": "F8 Inspect Kodi Medium Check",
+	"version": "0.2.0",
+	"browser_specific_settings": {
+		"gecko": {
+			"id": "kodi-medium-check@steph.local"
+		}
+	},
+	"host_permissions": [
+		"http://192.168.178.44:8080/*"
+	],
+	"background": {
+		"scripts": [
+			"background.js"
+		]
+	},
+	"content_scripts": [
+		{
+			"matches": [
+				"<all_urls>"
+			],
+			"js": [
+				"content-script.js"
+			],
+			"run_at": "document_idle"
+		}
+	],
+	"content_security_policy": {
+		"extension_pages": "script-src 'self'; object-src 'self'"
+	}
+}
