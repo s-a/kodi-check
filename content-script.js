@@ -197,25 +197,33 @@ function formatTooltip(query, resp) {
 	return lines.join("\n");
 }
 
-async function runCheck(query, seq) {
+async function runCheck(query, seq, isManual = false) {
 	// Cache zuerst (UX: sofortiges Ergebnis bei wiederholtem Hover)
 	const cached = cacheGet(query);
 	if (cached) {
-		setOverlay(cached.ok && cached.found ? "ok" : (cached.ok ? "missing" : "missing"));
-		setBadgeResult(!!cached.found, cached.total ?? 0);
+		if (!isManual) {
+			setOverlay(cached.ok && cached.found ? "ok" : (cached.ok ? "missing" : "missing"));
+			setBadgeResult(!!cached.found, cached.total ?? 0);
+		} else {
+			STATE.overlay.style.display = "none"; // Bei manueller Suche Overlay verstecken
+		}
 		showTip(formatTooltip(query, cached));
 		return;
 	}
 
-	setOverlay("loading");
-	setBadgeLoading();
+	if (!isManual) {
+		setOverlay("loading");
+		setBadgeLoading();
+	} else {
+		STATE.overlay.style.display = "none"; // Bei manueller Suche Overlay verstecken
+	}
 	showTip(`"${query}"\nStatus: …`);
 
 	const resp = await sendMessagePromise({ type: "CHECK_MEDIUM", text: query })
 		.catch((e) => ({ ok: false, error: String(e?.message || e) }));
 
 	if (seq !== STATE.reqSeq) return;
-	if (!STATE.inspectMode) return;
+	if (!STATE.inspectMode && !isManual) return;
 
 	if (resp?.ok) cacheSet(query, resp);
 
@@ -223,38 +231,51 @@ async function runCheck(query, seq) {
 	const found = !!resp?.found;
 	const total = Number(resp?.total ?? 0);
 
-	setOverlay(ok ? (found ? "ok" : "missing") : "missing");
-	setBadgeResult(found, total);
+	if (!isManual) {
+		setOverlay(ok ? (found ? "ok" : "missing") : "missing");
+		setBadgeResult(found, total);
+	}
 	showTip(formatTooltip(query, resp));
 }
 
-function scheduleCheck(el, query) {
+function scheduleCheck(el, query, isManual = false) {
 	if (STATE.timer) clearTimeout(STATE.timer);
 	const seq = ++STATE.reqSeq;
 
 	STATE.timer = setTimeout(() => {
-		if (!STATE.inspectMode) return;
-		if (STATE.lastEl !== el) return;
+		if (!STATE.inspectMode && !isManual) return;
+		if (!isManual && STATE.lastEl !== el) return;
 		if (!query) return;
-		runCheck(query, seq);
+		runCheck(query, seq, isManual);
 	}, DEBOUNCE_MS);
 }
 
 // F8 toggelt Modus nur per keydown (kein keyup)
 document.addEventListener("keydown", (e) => {
-	if (e.key !== "F8" || e.repeat) return;
-	e.preventDefault();
-	e.stopPropagation();
+	if (e.key === "F8" && !e.repeat) {
+		e.preventDefault();
+		e.stopPropagation();
 
-	STATE.inspectMode = !STATE.inspectMode;
+		STATE.inspectMode = !STATE.inspectMode;
 
-	if (STATE.inspectMode) {
-		ensureUi();
-		showTip("Inspect-Modus: ON");
-		setOverlay("loading");
-		setBadgeLoading();
-	} else {
-		hideUi();
+		if (STATE.inspectMode) {
+			ensureUi();
+			showTip("Inspect-Modus: ON");
+			setOverlay("loading");
+			setBadgeLoading();
+		} else {
+			hideUi();
+		}
+	} else if (e.key === "F9" && !e.repeat) { // Neue Option: F9 für manuelle Suche
+		e.preventDefault();
+		e.stopPropagation();
+
+		const manualQuery = window.prompt("Manuelle Suche: Geben Sie den Text ein (z.B. Filmname oder Titel - Artist):");
+		if (manualQuery && manualQuery.trim()) {
+			ensureUi();
+			STATE.lastEl = null; // Kein Element, Overlay verstecken
+			scheduleCheck(null, manualQuery.trim(), true); // isManual=true
+		}
 	}
 }, true);
 
