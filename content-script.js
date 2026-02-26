@@ -180,11 +180,11 @@ function formatTooltip(query, resp) {
 	lines.push(`"${resp.query}"`);
 	lines.push(statusLine);
 
-	// kleine Transparenzhilfe (kein Split-Status, nur “was wurde gesucht”)
-	if (resp.used?.audio || resp.used?.video) {
+	if (resp.used?.audio || resp.used?.video || resp.used?.tv) {
 		const a = resp.used.audio ? `audio="${resp.used.audio}"` : "";
 		const v = resp.used.video ? `video="${resp.used.video}"` : "";
-		const uv = [a, v].filter(Boolean).join("  ");
+		const t = resp.used.tv ? `tv="${resp.used.tv}"` : "";
+		const uv = [a, v, t].filter(Boolean).join("  ");
 		if (uv) lines.push(`Query: ${uv}`);
 	}
 

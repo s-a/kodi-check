@@ -1,6 +1,6 @@
 /* background.js
-   - Kodi JSON-RPC über HTTP:8080 + Basic Auth (wie PS1)
-   - Liefert EINEN Medium-Status + Details (Trefferliste)
+   - Kodi JSON-RPC über HTTP:8080 + Basic Auth
+   - Sucht jetzt in: Musik + Filme + Serien
 */
 
 const api = globalThis.browser ?? globalThis.chrome;
@@ -12,7 +12,7 @@ const KODI = {
 	timeoutMs: 6500
 };
 
-const MAX_ITEMS = 6; // UX: genug Details, ohne Spam
+const MAX_ITEMS = 6;
 
 (function assertHttpOnly() {
 	const u = new URL(KODI.url);
@@ -39,7 +39,7 @@ function normalizeText(input) {
 
 function splitTitleArtist(raw) {
 	const s = normalizeText(raw);
-	const parts = s.split(/\s-\s/); // exakt " - "
+	const parts = s.split(/\s-\s/);
 	if (parts.length >= 2) {
 		return { raw: s, title: parts[0].trim(), artist: parts.slice(1).join(" - ").trim() };
 	}
@@ -51,8 +51,6 @@ async function kodiJsonRpc(payload) {
 	const timer = setTimeout(() => ctrl.abort(), KODI.timeoutMs);
 
 	try {
-		console.log("[BG] Kodi URL:", KODI.url, "method:", payload?.method);
-
 		const res = await fetch(KODI.url, {
 			method: "POST",
 			headers: {
@@ -79,10 +77,10 @@ async function kodiJsonRpc(payload) {
 	}
 }
 
+// === AUDIO ===
 async function querySongs(candidate) {
 	const result = await kodiJsonRpc({
-		jsonrpc: "2.0",
-		id: 1,
+		jsonrpc: "2.0", id: 1,
 		method: "AudioLibrary.GetSongs",
 		params: {
 			filter: { operator: "contains", field: "title", value: candidate },
@@ -90,16 +88,15 @@ async function querySongs(candidate) {
 			limits: { start: 0, end: MAX_ITEMS }
 		}
 	});
-
 	const total = Number(result?.limits?.total ?? 0);
 	const songs = Array.isArray(result?.songs) ? result.songs : [];
 	return { total, songs };
 }
 
+// === FILME ===
 async function queryMovies(candidate) {
 	const result = await kodiJsonRpc({
-		jsonrpc: "2.0",
-		id: 1,
+		jsonrpc: "2.0", id: 1,
 		method: "VideoLibrary.GetMovies",
 		params: {
 			filter: { operator: "contains", field: "title", value: candidate },
@@ -107,18 +104,31 @@ async function queryMovies(candidate) {
 			limits: { start: 0, end: MAX_ITEMS }
 		}
 	});
-
 	const total = Number(result?.limits?.total ?? 0);
 	const movies = Array.isArray(result?.movies) ? result.movies : [];
 	return { total, movies };
+}
+
+// === SERIEN (neu) ===
+async function queryTVShows(candidate) {
+	const result = await kodiJsonRpc({
+		jsonrpc: "2.0", id: 1,
+		method: "VideoLibrary.GetTVShows",
+		params: {
+			filter: { operator: "contains", field: "title", value: candidate },
+			properties: ["title", "year"],
+			limits: { start: 0, end: MAX_ITEMS }
+		}
+	});
+	const total = Number(result?.limits?.total ?? 0);
+	const tvshows = Array.isArray(result?.tvshows) ? result.tvshows : [];
+	return { total, tvshows };
 }
 
 function formatSongItem(s) {
 	const title = s?.title ?? "";
 	const artist = Array.isArray(s?.artist) ? s.artist.join(", ") : (s?.artist ?? "");
 	const album = s?.album ?? "";
-	// Keine harte Typ-Differenz im Status; Details dürfen trotzdem erkennbar bleiben:
-	// Icon ist rein informativ.
 	return `♪ ${title}${artist ? " — " + artist : ""}${album ? " — " + album : ""}`.trim();
 }
 
@@ -127,6 +137,12 @@ function formatMovieItem(m) {
 	const year = m?.year ? ` (${m.year})` : "";
 	const file = m?.file ? ` — ${m.file}` : "";
 	return `🎬 ${title}${year}${file}`.trim();
+}
+
+function formatTVShowItem(t) {   // ← NEU
+	const title = t?.title ?? "";
+	const year = t?.year ? ` (${t.year})` : "";
+	return `📺 ${title}${year}`.trim();
 }
 
 function uniqNonEmpty(arr) {
@@ -146,12 +162,10 @@ function uniqNonEmpty(arr) {
 async function checkMedium(rawText) {
 	const parsed = splitTitleArtist(rawText);
 
-	// Kandidatenlogik:
-	// - Wenn "Title - Artist": für Audio primär Title, für Video primär Raw
-	// - Fallbacks jeweils umgekehrt
 	const audioCandidates = uniqNonEmpty([parsed.title, parsed.raw]);
-	const videoCandidates = uniqNonEmpty([parsed.raw, parsed.title]);
+	const videoCandidates = uniqNonEmpty([parsed.raw, parsed.title]); // für Filme + Serien
 
+	// Audio
 	let audio = { total: 0, used: "", items: [] };
 	for (const c of audioCandidates) {
 		const r = await querySongs(c);
@@ -161,6 +175,7 @@ async function checkMedium(rawText) {
 		if (r.total > 0) break;
 	}
 
+	// Filme
 	let video = { total: 0, used: "", items: [] };
 	for (const c of videoCandidates) {
 		const r = await queryMovies(c);
@@ -170,13 +185,23 @@ async function checkMedium(rawText) {
 		if (r.total > 0) break;
 	}
 
-	const total = (audio.total || 0) + (video.total || 0);
+	// Serien (neu)
+	let tv = { total: 0, used: "", items: [] };
+	for (const c of videoCandidates) {
+		const r = await queryTVShows(c);
+		tv.used = c;
+		tv.total = r.total;
+		tv.items = r.tvshows.map(formatTVShowItem);
+		if (r.total > 0) break;
+	}
+
+	const total = (audio.total || 0) + (video.total || 0) + (tv.total || 0);
 	const found = total > 0;
 
-	// Details: zusammenführen, aber kompakt halten
 	const items = []
 		.concat(audio.items || [])
 		.concat(video.items || [])
+		.concat(tv.items || [])
 		.slice(0, MAX_ITEMS);
 
 	return {
@@ -186,12 +211,8 @@ async function checkMedium(rawText) {
 		total,
 		used: {
 			audio: audio.used,
-			video: video.used
-		},
-		details: {
-			// Für Debug/Transparenz (kein Status-Splitting im UI nötig)
-			audioTotal: audio.total,
-			videoTotal: video.total
+			video: video.used,
+			tv: tv.used          // ← neu
 		},
 		items
 	};
